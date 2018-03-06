@@ -36,9 +36,11 @@ require_once AADSSO_PLUGIN_DIR . '/lib/php-jwt/src/BeforeValidException.php';
 require_once AADSSO_PLUGIN_DIR . '/lib/php-jwt/src/ExpiredException.php';
 require_once AADSSO_PLUGIN_DIR . '/lib/php-jwt/src/SignatureInvalidException.php';
 
-require_once AADSSO_PLUGIN_DIR . '/lib/guzzlehttp/guzzle/src/functions_include.php';
+require 'vendor/autoload.php';
 
 use GuzzleHttp\Client;
+
+
 
 define ('AADSSO_DEBUG', true);
 
@@ -314,10 +316,9 @@ class AADSSO {
 				// 2. Pass the Group Membership to allow us to control when a user is created if auto-provisioning is enabled.
 				$user = $this->get_wp_user_from_aad_user( $jwt, $group_memberships );
 				$accessToken = $token->access_token;
-				$tenantId = "19e2a592-4a57-4178-b67a-aa9aefbbdf28";
 
 				$guzzle = new \GuzzleHttp\Client();
-				$url = 'https://login.microsoftonline.com/' . $tenantId . '/oauth2/token?api-version=1.0';
+				$url = 'https://login.microsoftonline.com/' . $jwt->tid . '/oauth2/token?api-version=1.0';
 				$newToken = json_decode($guzzle->post($url, [
 				    'form_params' => [
 				        'client_id' => $this->settings->client_id,
@@ -331,7 +332,8 @@ class AADSSO {
 
 				$users_guzzle = new \GuzzleHttp\Client();
 				$users_url = "https://graph.microsoft.com/v1.0/users?\$filter=userPrincipalName%20eq%20'".$email."'&\$top=1";
-				error_log( "-----users_url----" );error_log( $users_url );error_log( "-----users_url----\n\n" );
+				error_log("");
+				error_log("-----users_url----");error_log($users_url);error_log("-----users_url----\n\n" );
 				$users = NULL;
 
 				try {
@@ -374,14 +376,14 @@ class AADSSO {
 
 				if ( is_a( $user, 'WP_User' ) ) {
 
-					update_user_meta($user->id, 'user_photo_url', $user_file_url);
+					update_user_meta($user->id, 'user_photo_url', $user_file_url, $jwt->tid);
 
 					// At this point, we have an authorization code, an access token and the user
 					// exists in WordPress (either because it already existed, or we created it
 					// on-the-fly). All that's left is to set the roles based on group membership.
 					// 4. If a user was created or found above, we can pass the groups here to have them assigned normally
 					if ( true === $this->settings->enable_aad_group_to_wp_role ) {
-						$user = $this->update_wp_user_roles( $user, $group_memberships );
+						$user = $this->update_wp_user_roles( $user, $jwt->oid, $jwt->tid );
 					}
 				}
 			} elseif ( isset( $token->error ) ) {
@@ -395,7 +397,9 @@ class AADSSO {
 					)
 				);
 			} elseif ($token->errors) {
-				error_log($token->errors);
+				error_log( "-----token->errors----" );
+				error_log( json_encode($token->errors) );
+				error_log( "-----token->errors----\n\n" );
 				if ($token->errors['http_request_failed']) {
 					return new WP_Error(
 						'http_request_failed',
@@ -527,6 +531,12 @@ class AADSSO {
 
 		// Of the AAD groups defined in the settings, get only those where the user is a member
 		$group_ids = array_keys( $this->settings->aad_group_to_wp_role_map );
+		error_log( "-----aad_user_id----" );
+		error_log( json_encode($aad_user_id) );
+		error_log( "-----aad_user_id----\n\n" );
+		error_log( "-----group_ids----" );
+		error_log( json_encode($group_ids) );
+		error_log( "-----group_ids----\n\n" );
 		$group_memberships = AADSSO_GraphHelper::user_check_member_groups( $aad_user_id, $group_ids );
 
 		// Check for errors in the group membership check response

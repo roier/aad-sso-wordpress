@@ -3,3 +3,4 @@
 !/Settings.template.json
 .idea
 /**/.DS_Store
+/vendor

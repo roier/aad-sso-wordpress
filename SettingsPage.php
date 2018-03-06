@@ -226,14 +226,6 @@ class AADSSO_Settings_Page {
 		);
 
 		add_settings_field(
-			'tenant_id', // id
-			__( 'Tenant ID', 'aad-sso-wordpress' ), // title
-			array( $this, 'tenant_id_callback' ), // callback
-			'aadsso_settings_page', // page
-			'aadsso_settings_general' // section
-		);
-
-		add_settings_field(
 			'client_secret', // id
 			__( 'Client secret', 'aad-sso-wordpress' ), // title
 			array( $this, 'client_secret_callback' ), // callback
@@ -491,17 +483,6 @@ class AADSSO_Settings_Page {
 		printf(
 			'<p class="description">%s</p>',
 			__( 'The client ID of the Azure AD application representing this blog.', 'aad-sso-wordpress' )
-		);
-	}
-
-	/**
-	 * Renders the `tenant_id` form control
-	 */
-	public function tenant_id_callback() {
-		$this->render_text_field( 'tenant_id' );
-		printf(
-			'<p class="description">%s</p>',
-			__( 'The tenant ID of the Azure AD application.<br/>You can find this id here <a href="https://www.whatismytenantid.com/" target="_blank">whatismytenantid.com</a>.', 'aad-sso-wordpress' )
 		);
 	}
 

@@ -22,7 +22,7 @@ class AADSSO_AuthorizationHelper
 		$auth_url = $settings->authorization_endpoint . '?'
 		 . http_build_query( array(
 					'response_type' => 'code',
-					'scope'         => 'openid',
+					'scope'         => 'openid profile',
 					'domain_hint'   => $settings->org_domain_hint,
 					'client_id'     => $settings->client_id,
 					'resource'      => $settings->graph_endpoint,
@@ -68,6 +68,8 @@ class AADSSO_AuthorizationHelper
 	 * @return mixed The decoded authorization result.
 	 */
 	public static function get_and_process_access_token( $authentication_request_body, $settings ) {
+
+		// error_log($settings->token_endpoint);
 
 		// Post the authorization code to the STS and get back the access token
 		$response = wp_remote_post( $settings->token_endpoint, array(

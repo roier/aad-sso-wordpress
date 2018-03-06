@@ -36,7 +36,11 @@ require_once AADSSO_PLUGIN_DIR . '/lib/php-jwt/src/BeforeValidException.php';
 require_once AADSSO_PLUGIN_DIR . '/lib/php-jwt/src/ExpiredException.php';
 require_once AADSSO_PLUGIN_DIR . '/lib/php-jwt/src/SignatureInvalidException.php';
 
-//define ('AADSSO_DEBUG', true);
+require_once AADSSO_PLUGIN_DIR . '/lib/guzzlehttp/guzzle/src/functions_include.php';
+
+use GuzzleHttp\Client;
+
+define ('AADSSO_DEBUG', true);
 
 class AADSSO {
 
@@ -156,13 +160,13 @@ class AADSSO {
 			'aad_auto_forward_login',
 			$this->settings->enable_auto_forward_to_aad
 		);
-		
+
 		/*
-		 * This offers a query parameter to offer an easy method to skip any sort of automatic 
+		 * This offers a query parameter to offer an easy method to skip any sort of automatic
 		 * redirect to Azure AD, displaying the login form instead. This check is intentionally
 		 * done after the 'aad_auto_forward_login' filter is applied, to ensure it also overrides
 		 * any filters.
-		 */ 
+		 */
 		if ( isset( $_GET['aadsso_no_redirect'] ) ) {
 			AADSSO::debug_log( 'Skipping automatic redirects to Azure AD.' );
 			$auto_redirect = FALSE;
@@ -293,8 +297,68 @@ class AADSSO {
 
 				// Invoke any configured matching and auto-provisioning strategy and get the user.
 				$user = $this->get_wp_user_from_aad_user( $jwt );
+				$accessToken = $token->access_token;
+				$tenantId = "19e2a592-4a57-4178-b67a-aa9aefbbdf28";
+
+				$guzzle = new \GuzzleHttp\Client();
+				$url = 'https://login.microsoftonline.com/' . $tenantId . '/oauth2/token?api-version=1.0';
+				$newToken = json_decode($guzzle->post($url, [
+				    'form_params' => [
+				        'client_id' => $this->settings->client_id,
+				        'client_secret' => $this->settings->client_secret,
+				        'resource' => 'https://graph.microsoft.com/',
+				        'grant_type' => 'client_credentials',
+				    ],
+				])->getBody()->getContents());
+				$newAccessToken = $newToken->access_token;
+				$email = $jwt->upn;
+
+				$users_guzzle = new \GuzzleHttp\Client();
+				$users_url = "https://graph.microsoft.com/v1.0/users?\$filter=userPrincipalName%20eq%20'".$email."'&\$top=1";
+				error_log( "-----users_url----" );error_log( $users_url );error_log( "-----users_url----\n\n" );
+				$users = NULL;
+
+				try {
+					$users = json_decode($users_guzzle->get($users_url, [
+						'headers' => [
+							'Authorization' => 'Bearer ' . $newAccessToken,
+							'Accept'        => 'application/json',
+						],
+						])->getBody()->getContents());
+				} catch (\Exception $e) {
+					error_log( "-----error getting user from graph----" );
+					error_log( json_encode($e) );
+					error_log( "-----error getting user from graph----\n\n" );
+				}
+
+				if ($users != NULL && count($users->value)) {
+					$user_id = $users->value[0]->id;
+					error_log( "-----user_id----" );error_log($user_id);error_log( "-----user_id----\n\n" );
+
+					$user_guzzle = new \GuzzleHttp\Client();
+					$user_url = "https://graph.microsoft.com/v1.0/users/".$user_id."/photo/\$value";
+					error_log( "-----user_url----" );error_log($user_url);error_log( "-----user_url----\n\n" );
+
+					$user_file_url = null;
+					try {
+						$user_file = fopen(__DIR__."/../../themes/avangard/assets/photos/".$user_id.".jpg", 'w') or die('Problems');
+						$users_guzzle->get($user_url, [
+								'headers' => [
+									'Authorization' => 'Bearer ' . $newAccessToken
+								],
+								'save_to' => $user_file
+							]);
+						$user_file_url = "/assets/photos/".$user_id.".jpg";
+					} catch (\Exception $e) {
+						error_log( "-----user doesn\'t have photo----" );
+						error_log( json_encode($e) );
+						error_log( "-----user doesn\'t have photo----\n\n" );
+					}
+				}
 
 				if ( is_a( $user, 'WP_User' ) ) {
+
+					update_user_meta($user->id, 'user_photo_url', $user_file_url);
 
 					// At this point, we have an authorization code, an access token and the user
 					// exists in WordPress (either because it already existed, or we created it
@@ -314,6 +378,16 @@ class AADSSO {
 						$token->error_description
 					)
 				);
+			} elseif ($token->errors) {
+				error_log($token->errors);
+				if ($token->errors['http_request_failed']) {
+					return new WP_Error(
+						'http_request_failed',
+						sprintf( __( 'TOKEN_ERROR. %s', 'aad-sso-wordpress' ), json_encode($token->errors['http_request_failed']) )
+					);
+				} else {
+					return new WP_Error( 'token_error', __( 'Unknown TOKEN_ERROR.', 'aad-sso-wordpress' ) );
+				}
 			} else {
 
 				// None of the above, I have no idea what happened.
@@ -378,7 +452,7 @@ class AADSSO {
 				);
 
 				$new_user_id = wp_insert_user( $userdata );
-				
+
 				if ( is_wp_error( $new_user_id ) ) {
 					// The user was authenticated, but not found in WP and auto-provisioning is disabled
 					return new WP_Error(
@@ -392,7 +466,7 @@ class AADSSO {
 				else
 				{
 					AADSSO::debug_log( 'Created new user: \'' . $unique_name . '\', user id ' . $new_user_id . '.' );
-					$user = new WP_User( $new_user_id );					
+					$user = new WP_User( $new_user_id );
 				}
 			} else {
 
@@ -400,7 +474,7 @@ class AADSSO {
 				return new WP_Error(
 					'user_not_registered',
 					sprintf(
-						__( 'ERROR: The authenticated user \'%s\' is not a registered user in this site.', 
+						__( 'ERROR: The authenticated user \'%s\' is not a registered user in this site.',
 						    'aad-sso-wordpress' ),
 						$unique_name
 					)
@@ -429,11 +503,11 @@ class AADSSO {
 		// Of the AAD groups defined in the settings, get only those where the user is a member
 		$group_ids = array_keys( $this->settings->aad_group_to_wp_role_map );
 		$group_memberships = AADSSO_GraphHelper::user_check_member_groups( $aad_user_id, $group_ids );
-		
+
 		// Check for errors in the group membership check response
 		if ( isset( $group_memberships->value ) ) {
 			AADSSO::debug_log( sprintf(
-				'Out of [%s], user \'%s\' is a member of [%s]', 
+				'Out of [%s], user \'%s\' is a member of [%s]',
 				implode( ',', $group_ids ), $aad_user_id, implode( ',', $group_memberships->value ) ), 20
 			);
 		} elseif ( isset ( $group_memberships->{'odata.error'} ) ) {
@@ -441,14 +515,14 @@ class AADSSO {
 			return new WP_Error(
 				'error_checking_group_membership',
 				sprintf(
-					__( 'ERROR: Unable to check group membership in Azure AD: <b>%s</b>.', 
+					__( 'ERROR: Unable to check group membership in Azure AD: <b>%s</b>.',
 					    'aad-sso-wordpress' ), $group_memberships->{'odata.error'}->code )
 			);
 		} else {
 			AADSSO::debug_log( 'Unexpected response to checkMemberGroups: ' . json_encode( $group_memberships ) );
 			return new WP_Error(
 				'unexpected_response_to_checkMemberGroups',
-				__( 'ERROR: Unexpected response when checking group membership in Azure AD.', 
+				__( 'ERROR: Unexpected response when checking group membership in Azure AD.',
 			        'aad-sso-wordpress' )
 			);
 		}
@@ -473,7 +547,7 @@ class AADSSO {
 				'Set roles [%s] for user [%s].', implode( ', ', $roles_to_set ), $user->ID ), 10 );
 		} else if ( ! empty( $this->settings->default_wp_role ) ) {
 			$user->set_role( $this->settings->default_wp_role );
-			AADSSO::debug_log( sprintf( 
+			AADSSO::debug_log( sprintf(
 				'Set default role [%s] for user [%s].', $this->settings->default_wp_role, $user->ID ), 10 );
 		} else {
 			$error_message = sprintf(
@@ -507,6 +581,12 @@ class AADSSO {
 	 * @return string The authorization URL used to initiate a sign-in to Azure AD.
 	 */
 	function get_login_url() {
+		// if ($_SESSION['aadsso_antiforgery-id']) {
+		// 	$antiforgery_id = $_SESSION['aadsso_antiforgery-id'];
+		// } else {
+		// 	$antiforgery_id = com_create_guid();
+		// 	$_SESSION['aadsso_antiforgery-id'] = $antiforgery_id;
+		// }
 		$antiforgery_id = com_create_guid();
 		$_SESSION['aadsso_antiforgery-id'] = $antiforgery_id;
 		return AADSSO_AuthorizationHelper::get_authorization_url( $this->settings, $antiforgery_id );
@@ -610,7 +690,7 @@ class AADSSO {
 	 * If there are multiple lines in the message, they will each be emitted as a log line.
 	 */
 	public static function debug_log( $message, $level = 0 ) {
-		
+
 		// AADSSO_DEBUG and AADSSO_DEBUG_LEVEL are already defined.
 		if ( AADSSO_DEBUG && AADSSO_DEBUG_LEVEL >= $level ) {
 			if ( FALSE === strpos( $message, "\n" ) ) {
